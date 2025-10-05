@@ -65,3 +65,6 @@ These values are set in `src/main.cpp` and can be tuned there.
 - The code uses OpenFHE high-level API types (e.g. `CryptoContextCKKSRNS`, `DCRTPoly`) and requires the include/library layout used when building OpenFHE.
 - The current demo performs single-party key generation and decryption (for simplicity). The design notes describe a threshold/multiparty model, but the code in `src/main.cpp` performs a straightforward `Decrypt(secretKey, encryptedMaxSim, &result)` step.
 - This README documents how to build and run the code as it exists in the repository. For production or multiparty usage, the key-generation and decryption flow must be adapted accordingly.
+
+Output:
+![alt text](image.png)
