@@ -15,7 +15,7 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 
 # OpenFHE paths
-set(OpenFHE_ROOT "c:/Users/drparadox/openfhe-development")
+set(OpenFHE_ROOT "c:/Users/Deepak/openfhe-development")
 set(OpenFHE_INCLUDE_DIRS 
     "${OpenFHE_ROOT}/src/pke/include" 
     "${OpenFHE_ROOT}/src/core/include" 
@@ -28,19 +28,19 @@ set(OpenFHE_INCLUDE_DIRS
 
 # Find OpenFHE libraries
 find_library(OPENFHE_PKE_LIB 
-    NAMES libOPENFHEpke_static OPENFHEpke libOPENFHEpke libOPENFHEpke.dll.a
+    NAMES libOPENFHEpke.dll.a
     PATHS "${OpenFHE_ROOT}/build/lib"
     NO_DEFAULT_PATH
 )
 
 find_library(OPENFHE_CORE_LIB 
-    NAMES libOPENFHEcore_static OPENFHEcore libOPENFHEcore libOPENFHEcore.dll.a
+    NAMES libOPENFHEcore.dll.a
     PATHS "${OpenFHE_ROOT}/build/lib"
     NO_DEFAULT_PATH
 )
 
 find_library(OPENFHE_BINFHE_LIB 
-    NAMES libOPENFHEbinfhe_static OPENFHEbinfhe libOPENFHEbinfhe libOPENFHEbinfhe.dll.a
+    NAMES libOPENFHEbinfhe.dll.a
     PATHS "${OpenFHE_ROOT}/build/lib"
     NO_DEFAULT_PATH
 )
@@ -75,7 +75,6 @@ add_definitions(-DOPENFHE_VERSION=1.4.0)
 
 # Source files
 set(SOURCES
-    src/ThresholdVectorSimilarity.cpp
     src/main.cpp
 )
 

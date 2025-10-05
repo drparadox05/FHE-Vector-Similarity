@@ -1,107 +1,63 @@
-# Design Notes: Encrypted Biometric Similarity
+# Design Notes: Encrypted Vector Similarity
 
-So here's the deal - we need to find the maximum cosine similarity across a bunch of encrypted 512-D vectors without ever decrypting the individual similarities. Classic private information retrieval problem, but with a twist.
+This document describes the design choices reflected in the current codebase (`src/main.cpp`) and the intended larger system.
 
-## Privacy Setup
+## Scope of this repo vs production
 
-### Threat Model
+- The code in this repository is a single-party demo: it performs KeyGen, Encrypt, Compute, and Decrypt using a single secret key in `main.cpp` for simplicity and verification.
+- The design supports a threshold/multiparty model conceptually (t-of-n partial decryptions). The current code does not implement distributed key generation or partial decryption — that is left as a future integration.
 
-We assume the compute server is potentially compromised but the threshold parties are honest. Goal is to keep individual vectors private while revealing only the aggregated maximum.
+## Core algorithm and packing
 
-### Threshold Approach
+- Vector dimension: 512 (constant `DIM` in `main.cpp`).
+- Database size (default): 1000 vectors (`NUM_VECTORS`).
+- Packing/batch: code uses CKKS batch slots (`parameters.SetBatchSize(8192)`). Each plaintext stores a single vector in the first 512 slots; the remaining slots are zero.
+- Similarity: cosine similarity computed as dot-product between unit vectors (vectors are normalized on generation). The code computes elementwise multiplication followed by a sum-reduction (rotations + additions) to obtain the dot product.
 
-Using the classic t-of-n setup (going with 2-of-3 for the demo):
+Implementation details found in `src/main.cpp`:
 
-- Generate secret shares across multiple parties
-- Compute server only gets public + evaluation keys
-- Need t parties to collaborate for final decryption
-- Each party provides partial decryption, then combine
+- `generateUnitVector(int dim, std::mt19937 &gen)` generates a random unit vector.
+- `sumReduction(cc, ciphertext, dim)` performs tree-style rotations and adds to reduce per-slot products into the dot-product value.
+- `encryptedMaxImproved(...)` performs a tournament reduction using polynomial-style soft-comparators to compute maxima between ciphertext values.
 
-This is basically the same pattern that Duality describes in their blog - nobody sees the full secret key, everyone contributes to the final result.
+## Comparator and max reduction
 
-## Encrypted Computation
+- The comparator is implemented homomorphically using a small polynomial approximation built from scaled differences and low-degree terms (the demo implements a cubic-like correction around a sigmoid/step).
+- Max of two values uses the identity max(a,b) = a·σ + b·(1-σ) where σ is an approximation of sign(a-b)/2 + 1/2. The tournament repeatedly reduces the candidate list by pairing neighbors until one ciphertext remains.
 
-### Packing Strategy
+## CKKS parameters used in the demo
 
-CKKS gives us ~16k slots, and we need 512 per vector, so we can pack 32 vectors per ciphertext. This is huge for performance - instead of computing one similarity at a time, we get 32 in parallel. Storage efficiency is nice too (32x reduction).
+- Multiplicative depth: 40 (set in `parameters.SetMultiplicativeDepth(40)`).
+- Scaling modulus size: 50 (set in `parameters.SetScalingModSize(50)`).
+- Batch size: 8192 (set in `parameters.SetBatchSize(8192)`).
+- Ring dimension: 32768 (set with `parameters.SetRingDim(32768)`).
+- First modulus size: 60 (set with `parameters.SetFirstModSize(60)`).
 
-### Computing Similarities
+These choices are conservative for the demo. They can be tuned for larger datasets or different comparator polynomial degrees.
 
-The packed approach means we:
+## Practical points and limitations
 
-1. Replicate the query across all 32 slots to match the database packing
-2. Multiply element-wise (gives us 32 products simultaneously)
-3. Do tree reduction within each 512-slot block to get the dot products
-4. Mask out everything except the similarity values at positions 0, 512, 1024, etc.
+- Single-key demo: The repo performs `cc->Decrypt(secretKey, encryptedMaxSim, &result);` and prints the decrypted value. To move to threshold decryption, implement distributed key generation, partial decryptions, and combination of partial results.
+- Packing: the current code places one vector per plaintext into the first 512 slots. The larger packing strategies (storing multiple vectors per ciphertext) discussed in high-level design are not implemented in the demo and would require reorganizing plaintext layout and rotations accordingly.
+- Performance: The demo is single-threaded for most crypto operations; OpenMP is enabled by CMake, and some operations may use parallelism depending on OpenFHE build options.
 
-### Finding the Max
+## Extending to production / large scale
 
-We Can't just scan linearly because that would blow up our multiplicative depth. Instead:
+If you want to scale this design to large databases or a true multiparty threshold setup, consider the following incremental steps:
 
-- Within each ciphertext: tournament reduction of the 32 similarities
-- Across ciphertexts: same tournament approach for batch maxima
-- For the comparator: Chebyshev polynomial approximation of sign function
-  - max(a,b) = (a+b)/2 + sign(a-b)·(a-b)/2
-  - Degree-7 polynomial gets us close to 1e-4 accuracy
+1. Replace single-key decrypt with a threshold keygen and partial-decrypt API (OpenFHE supports distributed keygen primitives in recent versions).
+2. Implement packing of multiple 512-D vectors per plaintext slot-layout to amortize expensive rotations (needs careful indexing and rotation key generation for offsets used by sumReduction).
+3. Increase comparator polynomial degree (7→9→11) to reduce approximation error; increase multiplicative depth and modulus sizes accordingly.
+4. Introduce sharding + streaming: compute local maxima per shard, persist intermediate maxima, then aggregate.
+5. Add tests and accuracy regression checks comparing plaintext vs encrypted outputs across multiple random seeds and sizes.
 
-The polynomial approach is neat because it stays homomorphic throughout. No plaintext peeks.
+## Error sources and mitigation
 
-## CKKS Parameters
+- CKKS approximation/quantization: normalize vectors to unit length before encryption; choose scaling/modulus parameters conservatively.
+- Polynomial comparator error: increase polynomial degree and modulus budget for lower error.
+- Noise growth: increase multiplicative depth and modulus sizes, or enable bootstrapping for unlimited depth (at a performance cost).
 
-Had to balance security vs performance here:
+## Files of interest
 
-- Ring dim: 32,768 (gives us 128-bit security)
-- Modulus: 50-bit initial + 40-bit scaling factors
-- Depth budget: 100 levels (supports the polynomial operations)
-- Auto-scaling to avoid manual rescaling headaches
-
-The accuracy control comes from unit vector normalization (keeps similarities in [-1,1]) and choosing modulus sizes that preserve precision through the computation depth.
-
-## Scaling to 1M Vectors
-
-### The Plan
-
-Three-tier reduction:
-
-```
-Tier 1: Local max per ciphertext (32 vectors → 1 max)
-Tier 2: Shard max per file (1,000 ciphertexts → 1 max)
-Tier 3: Global max across shards (32 shards → 1 max)
-```
-
-### Memory Strategy
-
-The naive approach would blow up memory, so we shard the database:
-
-- 32 shards of 32K vectors each for 1M total and stream one shard at a time
-
-### Hardware Acceleration
-
-GPUs could give you 10-50x speedup on the polynomial operations. For really large deployments, worth considering FPGA acceleration or even custom silicon.
-
-## Error Analysis
-
-The main error sources are:
-
-1. CKKS quantization (~1.4×10⁻¹⁰ per operation)
-2. Polynomial approximation (~8×10⁻⁶ for degree-7)
-3. Accumulated noise (grows logarithmically)
-
-To hit the 1e-4 target reliably, bump the polynomial degree to 9 or 11, increase the depth budget to 150+, and use larger modulus sizes. With optimizations, we can get down to ~6×10⁻⁷ error.
-
-## Design Choices
-
-Why these decisions?
-
-- **CKKS vs BGV**: Approximate arithmetic is perfect for floating-point similarities
-- **Threshold vs single-key**: Trust distribution, no single point of failure
-- **Packing vs individual**: 32x efficiency gain is too good to pass up
-- **Tournament vs linear**: O(log n) depth instead of O(n)
-- **Streaming vs batch**: Only way to handle million-vector scale with reasonable memory
-- **Polynomial vs lookup**: Keeps everything homomorphic
-
-## Alternative Approaches
-
-Could simplify by only outputting the boolean threshold decision instead of exact max similarity. Reduces complexity and error accumulation, might be sufficient for biometric matching.
-
-Bootstrapping is disabled for performance, but if you need circuits deeper than 100 multiplicative levels, it's there. Just need careful parameter tuning.
+- `src/main.cpp` — demo implementation and the authoritative place for runtime defaults.
+- `CMakeLists.txt` — build configuration and expected OpenFHE paths.

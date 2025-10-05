@@ -1,82 +1,67 @@
-# Encrypted Biometric Similarity System (OpenFHE CKKS)
+# Encrypted Vector Similarity (OpenFHE CKKS)
 
-**Privacy-preserving maximum cosine similarity computation over encrypted 512-dimensional vectors using threshold homomorphic encryption.**
+This repository contains a demo program that computes the maximum cosine similarity between a query and a database of unit vectors using the CKKS scheme from OpenFHE.
 
-This system demonstrates a complete solution for computing the maximum cosine similarity across an encrypted database without ever decrypting individual vectors. Only the final maximum similarity value and threshold decision are revealed through secure threshold decryption.
+The executable is built as `encrypted_similarity` (Windows: `encrypted_similarity.exe`). The demo generates a synthetic database, encrypts it, computes encrypted cosine similarities against an encrypted query, reduces to the maximum value using a homomorphic comparator, and finally decrypts the result.
 
+## What this project does
 
-## Architecture
+- Generates a database of unit vectors (default: 1000 vectors of 512 dimensions).
+- Creates an OpenFHE CKKS context and keys.
+- Packs vectors into CKKS plaintexts and encrypts them.
+- Computes encrypted dot-products (cosine similarity) with the query using packed operations and a sum-reduction.
+- Finds the encrypted maximum using a tournament-style comparator implemented with polynomial approximations.
+- Decrypts the maximum value and prints accuracy/error against the plaintext max.
 
-### Privacy Model
+## Build requirements
 
-- **Threshold Decryption**: t-of-n multiparty scheme (default: 2-of-3)
-- **No Full Secret Key**: Server only holds public and evaluation keys
-- **Secure Computation**: All similarity computations performed homomorphically
-- **Minimal Leakage**: Only final maximum similarity and threshold decision revealed
-- **Polynomial Degree**: Use degree-7 Chebyshev approximation (configurable to 9/11)
+- CMake 3.20 or newer
+- A C++17-compatible compiler (MSYS2/MinGW or MSVC/Visual Studio)
+- OpenFHE development build available and pointed to by `OpenFHE_ROOT` in `CMakeLists.txt`
+- OpenMP (used for parallelism)
 
-### Core Components
+See `CMakeLists.txt` for the exact include/library paths used in this repo. By default the file sets:
 
-1. **Vector Packing**: Multiple 512-D vectors per ciphertext for efficiency
-2. **Encrypted Cosine Similarity**: Packed dot product computation
-3. **Encrypted Maximum**: Tournament-style reduction with polynomial comparators
-4. **Threshold Decision**: Encrypted comparison against configurable threshold τ
+- `OpenFHE_ROOT` to `c:/Users/Deepak/openfhe-development` (adjust this to your OpenFHE build)
 
-### System Requirements
+## Build (Windows / MSYS2 pwsh)
 
-- **OS**: Windows 10/11 (tested with MSYS2 MinGW)
-- **Compiler**: C++17 compatible (GCC 9+ recommended)
+Open a shell where CMake and your compiler are available (MSYS2 MinGW, or Developer Command Prompt for MSVC). Then:
 
+```powershell
+# create build directory and configure
+> mkdir build; cd build
+> cmake .. -DCMAKE_BUILD_TYPE=Release
 
-## 🚀 Quick Start
+# build the project
+> cmake --build . --config Release -- /m
 
-### One-Command Build and Run
-
-```bash
-# Build
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j
-
-# Run demo
-./encrypted_similarity.exe
+# resulting executable: build/encrypted_similarity.exe
 ```
 
-### Expected Output
+If CMake fails to find OpenFHE, edit `CMakeLists.txt` and set `OpenFHE_ROOT` to the path where you built OpenFHE and its `build` directory.
 
+## Run
+
+From the `build` directory:
+
+```powershell
+> .\encrypted_similarity.exe
 ```
-------- START -------
 
-Configuration:
-- Vectors: 100 x 512D
-- Batch size: 32
-- Multiplicative depth: 100
-- Parallel processing: enabled
-- Threads: 8
-- Threshold: 0.95
+The program prints configuration details, progress for encryption/computation steps, and a final report including the decrypted encrypted max, plaintext max (computed locally for verification), absolute error, and a simple threshold decision.
 
-[42ms] Generating threshold keys for 3 parties...
-[156ms] CKKS context created
-[158ms] Ring dimension: 32768
-[159ms] Slots per vector: 512
-[160ms] Vectors per ciphertext: 32
-[162ms] Generating 100 test vectors...
-[168ms] Vector generation complete
-[169ms] Plaintext max similarity: 0.847523
-[172ms] Encrypting database with packing...
-[298ms] Database encryption complete: 100 vectors in 4 ciphertexts
-[301ms] Encrypting query vector (replicated to match packed DB)...
-[315ms] Query encrypted (level: 5)
-[318ms] Computing streaming approximation...
-[489ms] Streaming computation complete. Processed 100 vectors in 1 batches.
-[492ms] Performing threshold decryption with 2 parties...
+## Key default constants (from `src/main.cpp`)
 
-------- OUTPUT -------
-[495ms] Plaintext Max: 0.847523
-[495ms] Encrypted Result: 0.847441
-[495ms] Absolute Error: 8.2e-05
-[495ms] Decision: UNIQUE
-PERF: Total runtime took 495ms
+- DIMENSION: 512
+- DATABASE SIZE: 1000 (variable `NUM_VECTORS` in `main.cpp`)
+- THRESHOLD: 0.8 (variable `THRESHOLD`)
+- CKKS parameters: multiplicative depth 40, scaling mod size 50, ring dimension 32768, batch size 8192
 
-✓ system completed successfully!
-```
+These values are set in `src/main.cpp` and can be tuned there.
+
+## Notes
+
+- The code uses OpenFHE high-level API types (e.g. `CryptoContextCKKSRNS`, `DCRTPoly`) and requires the include/library layout used when building OpenFHE.
+- The current demo performs single-party key generation and decryption (for simplicity). The design notes describe a threshold/multiparty model, but the code in `src/main.cpp` performs a straightforward `Decrypt(secretKey, encryptedMaxSim, &result)` step.
+- This README documents how to build and run the code as it exists in the repository. For production or multiparty usage, the key-generation and decryption flow must be adapted accordingly.
